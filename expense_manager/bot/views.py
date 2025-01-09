@@ -8,14 +8,17 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from room.models import Room
 from user.models import TelegramUser
 import environ
+import requests
+from .models import RoomCreationSession
 
 
 env = environ.Env()
 environ.Env.read_env("../expense_manager/.env")
 API_KEY = env("API_KEY")
+url = f"https://api.telegram.org/bot{API_KEY}/sendMessage"
 bot = Bot(token=API_KEY)
 
-USERNAME, NAME, DESCRIPTION, MEMBERS = range(4)
+USERNAME, NAME, DESCRIPTION, MEMBERS, EXPENSE_NAME, EXPENSE_AMOUNT, EXPENSE_PARTICIPANTS = range(7)
 
 def generate_unique_room_code():
     while True:
@@ -84,7 +87,7 @@ def handle_callback(update: Update, context: CallbackContext):
         
         rooms = user.rooms.all()
         if rooms.exists():
-            room_list = "\n".join([f"{room.name} - /{room.code}" for room in rooms])
+            room_list = "\n".join([f"{room.name}\n{room.description}\n /{room.code}" for room in rooms])
             query.edit_message_text(f"اتاق‌های شما:\n{room_list}")
         else:
             query.edit_message_text("شما در هیچ اتاقی عضو نیستید.")
@@ -151,12 +154,121 @@ conversation_handler = ConversationHandler(
     fallbacks=[CommandHandler('cancel', cancel)],
 )
 
+def send_message(message, CHAT_ID):
+    response = requests.post(url, data={
+        "chat_id": CHAT_ID,
+        "text": message
+    })
+    
+
+def start(CHAT_ID):
+    
+    user, created = TelegramUser.objects.get_or_create(telegram_id=CHAT_ID)
+    
+    if user.username:
+        message = f"سلام {user.username}! به ربات مدیریت هزینه‌ها خوش آمدید!"
+    else:
+        message = "سلام به ربات مدیتریت هزینه ها خوش آمدید لطفا یوزرنیم خود را به صورت @username وارد کنید"
+    
+    send_message(message, CHAT_ID)
+
+def create_username(CHAT_ID, username):
+    user, created = TelegramUser.objects.get_or_create(telegram_id=CHAT_ID)
+    if created:
+        user.username = username
+        user.save()
+        message = f"یوزرنیم شما با موفقیت ثبت شد. به ربات مدیریت هزینه ها خوش آمدید!"
+    else:
+        message = "شما قبلا یوزرنیم ثبت کرده اید."
+    send_message(message, CHAT_ID)
+
+def send_main_menu(CHAT_ID):
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "ساخت اتاق جدید", "callback_data": "create_room"}],
+            [{"text": "دیدن اتاق هایی که عضو هستم", "callback_data": "view_rooms"}],
+            [{"text": "دیدن اتاق های من", "callback_data": "view_my_rooms"}],
+        ]
+    }
+    response = requests.post(url, data={
+        "chat_id": CHAT_ID,
+        "text": "سلام! انتخاب کنید چه کاری می‌خواهید انجام دهید:",
+        "reply_markup": keyboard
+    })
+
+def start_create_room(CHAT_ID):
+    send_message("لطفا نام اتاق را به صورت نام=(نام اتاق) وارد کنید پرانتز هارا نگذارید", CHAT_ID)
 
 @csrf_exempt
 def telegram_webhook(request):
-    payload = json.loads(request.body.decode('UTF-8'))
-    update = Update.de_json(payload, bot)
-    dispatcher = Dispatcher(bot, update, workers=0)
-    dispatcher.add_handler(conversation_handler)
-    dispatcher.process_update(update)
-    return HttpResponse("Webhook is set!")
+    if request.method == 'POST':
+        update = Update.de_json(request.body, bot)
+        message = update["message"]["text"].strip()
+        chat_id = update["message"]["sender_chat"]["id"]
+        if message == "/start":
+            start(chat_id)
+            telegram_user = TelegramUser.objects.filter(chat_id=chat_id).first()
+            if telegram_user.username is not None:
+                send_main_menu(chat_id)
+
+        elif message.startswith("@"):
+            username = message.split("@")[1]
+            create_username(chat_id, username)
+            telegram_user = TelegramUser.objects.filter(username=username).first()
+            if telegram_user:
+                send_main_menu(chat_id)
+        
+        elif message == "create_room":
+            start_create_room(chat_id)
+        
+        elif message.startswith("نام="):
+            room_name = message.split("=")[1].strip()
+            telegram_user = TelegramUser.objects.filter(chat_id=chat_id).first()
+            RoomCreationSession.objects.create(user=telegram_user, room_name=room_name)
+            send_message("لطفا توضیحات را به شکل توضیحات = توضیحات وارد کنید", chat_id)
+        elif message.startswith("توضیحات="):
+            room_description = message.split("=")[1].strip()
+            session = RoomCreationSession.objects.filter(user__chat_id=chat_id).first()
+            if session:
+                session.room_description = room_description
+                session.save()
+                send_message("لطفا یوزرنیم هایی که در اتاق می‌خواهید قرار دهید را به صورت usernames = username1,username2,... وارد کنید", chat_id)
+            else :
+                send_message("لطفا ابتدا نام اتاق را وارد کنید", chat_id)
+                send_main_menu(chat_id)
+        elif message.startswith("usernames ="):
+            usernames = message[11:].split(",")
+            session = RoomCreationSession.objects.filter(user__chat_id=chat_id).first()
+            response = ''
+            if session:
+                room = Room.objects.create(name=session.room_name, description=session.room_description, admin=session.user)
+                for username in usernames:
+                    user = TelegramUser.objects.filter(username=username.strip()).first()
+                    if user:
+                        room.members.add(user)
+                        response += f"کاربر {user.username} به اتاق اضافه شد\n"
+                    else:
+                        response += f"کاربر {username} یافت نشد\n"
+                room.members.add(session.user)
+                send_message(response, chat_id)
+                session.delete()
+                send_main_menu(chat_id)
+            else:
+                send_message("لطفا ابتدا نام اتاق و توضیحات را وارد کنید", chat_id)
+        
+
+
+                
+
+
+
+        
+        
+
+
+            
+
+        
+        return HttpResponse('OK', status=200)
+    else:
+        return HttpResponse('Invalid request method', status=405)
