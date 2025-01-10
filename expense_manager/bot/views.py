@@ -159,7 +159,16 @@ def send_message(message, CHAT_ID):
         "chat_id": CHAT_ID,
         "text": message
     })
-    
+
+def send_message_with_keyboard(message, keyboard, CHAT_ID):
+    response = requests.post(url, data={
+        "chat_id": CHAT_ID,
+        "text": message,
+        "reply_markup": json.dumps({"keyboard": keyboard})
+    })
+room_creation_cancle_keyboard = [
+    [InlineKeyboardButton("لغو", callback_data='cancel_room_creation')]
+]
 
 def start(CHAT_ID):
     
@@ -197,7 +206,7 @@ def send_main_menu(CHAT_ID):
     })
 
 def start_create_room(CHAT_ID):
-    send_message("لطفا نام اتاق را به صورت نام=(نام اتاق) وارد کنید پرانتز هارا نگذارید", CHAT_ID)
+    send_message_with_keyboard("لطفا نام اتاق را به صورت نام=(نام اتاق) وارد کنید پرانتز هارا نگذارید",room_creation_cancle_keyboard, CHAT_ID)
 
 @csrf_exempt
 def telegram_webhook(request):
@@ -221,18 +230,31 @@ def telegram_webhook(request):
         elif message == "create_room":
             start_create_room(chat_id)
         
+        elif message == "cancel_room_creation":
+            session = RoomCreationSession.objects.filter(user__chat_id=chat_id)
+            if session:
+                session.delete()
+                send_message("از ساخت اتاق کنسل شد.", chat_id)
+            else:
+                send_message("اتاقی وجود نداشت برای کنسل کردن", chat_id)
+            
+            send_main_menu(chat_id)
+
+        
         elif message.startswith("نام="):
             room_name = message.split("=")[1].strip()
             telegram_user = TelegramUser.objects.filter(chat_id=chat_id).first()
             RoomCreationSession.objects.create(user=telegram_user, room_name=room_name)
-            send_message("لطفا توضیحات را به شکل توضیحات = توضیحات وارد کنید", chat_id)
+            send_message_with_keyboard("لطفا توضیحات را به شکل توضیحات = توضیحات وارد کنید", room_creation_cancle_keyboard, chat_id)
+
+
         elif message.startswith("توضیحات="):
             room_description = message.split("=")[1].strip()
             session = RoomCreationSession.objects.filter(user__chat_id=chat_id).first()
             if session:
                 session.room_description = room_description
                 session.save()
-                send_message("لطفا یوزرنیم هایی که در اتاق می‌خواهید قرار دهید را به صورت usernames = username1,username2,... وارد کنید", chat_id)
+                send_message_with_keyboard("لطفا یوزرنیم هایی که در اتاق می‌خواهید قرار دهید را به صورت usernames = username1,username2,... وارد کنید", room_creation_cancle_keyboard,chat_id)
             else :
                 send_message("لطفا ابتدا نام اتاق را وارد کنید", chat_id)
                 send_main_menu(chat_id)
@@ -256,6 +278,38 @@ def telegram_webhook(request):
             else:
                 send_message("لطفا ابتدا نام اتاق و توضیحات را وارد کنید", chat_id)
         
+        elif message == "show_username":
+            telegram_user = TelegramUser.objects.filter(chat_id=chat_id).first()
+            if telegram_user:
+                send_message(f"یوزرنیم شما: {telegram_user.username}", chat_id)
+                send_main_menu(chat_id)
+            else:
+                send_message("شما یوزرنیمی ندارید. لطفا ابتدا یوزرنیم خود را ثبت کنید.", chat_id)
+        
+        elif message == "list_rooms":
+            telegram_user = TelegramUser.objects.get(chat_id=chat_id)
+            rooms = telegram_user.rooms.all()
+            if rooms:
+                response = "اتاق های شما:\n"
+                for room in rooms:
+                    response += f"{room.name}\n{room.description}\ncode=/{room.code}\n"
+                send_message(response, chat_id)
+                send_main_menu(chat_id)
+            else:
+                send_message("شما در هیچ اتاقی عضو نیستید.", chat_id)
+                send_main_menu(chat_id)
+        
+        elif message.startswith("/") and message != "/start":
+            code = message[1:]
+            room = Room.objects.filter(code=code).first()
+            if room:
+                if room.members.filter(chat_id=chat_id).exists():
+                    send_message("شما در این اتاق عضو هستید.", chat_id)
+                else:
+                    room.members.add(TelegramUser.objects.get(chat_id=chat_id))
+                    send_message("شما به اتاق اضافه شدید.", chat_id)
+            else:
+                send_message("اتاق یافت نشد.", chat_id)
 
 
                 
