@@ -5,11 +5,11 @@ from django.views.decorators.csrf import csrf_exempt
 from telegram import Update, Bot
 from telegram.ext import Dispatcher, CommandHandler, MessageHandler, Filters, CallbackQueryHandler, CallbackContext, ConversationHandler, Updater
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from room.models import Room
+from room.models import Room, Expense, Payment
 from user.models import TelegramUser
 import environ
 import requests
-from .models import RoomCreationSession
+from .models import RoomCreationSession, ExpenseCreationSession
 
 
 env = environ.Env()
@@ -208,6 +208,22 @@ def send_main_menu(CHAT_ID):
 def start_create_room(CHAT_ID):
     send_message_with_keyboard("لطفا نام اتاق را به صورت نام=(نام اتاق) وارد کنید پرانتز هارا نگذارید",room_creation_cancle_keyboard, CHAT_ID)
 
+def send_room_main_menu(CHAT_ID, room):
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "دیدن اعضای اتاق", "callback_data": f"view_room_members={room.id}"}],
+            [{"text": "دیدن بدهکاری و بستانکاری های من", "callback_data": f"view_room_expenses={room.id}"}],
+            [{"text": "افزودن هزینه جدید", "callback_data": f"add_expense={room.id}"}],
+            [{"text": "اضافه کردن اعضا", "callback_data": f"add_room_members={room.id}"}],
+            [{"text": "بازگشت به منوی اصلی", "callback_data": "main_menu"}],
+        ]
+    }
+    response = requests.post(url, data={
+        "chat_id": CHAT_ID,
+        "text": f"منوی اتاق {room.name}",
+        "reply_markup": keyboard
+    })
+
 @csrf_exempt
 def telegram_webhook(request):
     if request.method == 'POST':
@@ -263,7 +279,7 @@ def telegram_webhook(request):
             session = RoomCreationSession.objects.filter(user__chat_id=chat_id).first()
             response = ''
             if session:
-                room = Room.objects.create(name=session.room_name, description=session.room_description, admin=session.user)
+                room = Room.objects.create(name=session.room_name, description=session.room_description, admin=session.user, code = generate_unique_room_code())
                 for username in usernames:
                     user = TelegramUser.objects.filter(username=username.strip()).first()
                     if user:
@@ -292,7 +308,7 @@ def telegram_webhook(request):
             if rooms:
                 response = "اتاق های شما:\n"
                 for room in rooms:
-                    response += f"{room.name}\n{room.description}\ncode=/{room.code}\n"
+                    response += f"{room.name}\n{room.description}\ncode = /{room.code}\n"
                 send_message(response, chat_id)
                 send_main_menu(chat_id)
             else:
@@ -303,13 +319,168 @@ def telegram_webhook(request):
             code = message[1:]
             room = Room.objects.filter(code=code).first()
             if room:
-                if room.members.filter(chat_id=chat_id).exists():
-                    send_message("شما در این اتاق عضو هستید.", chat_id)
+                telegram_user = TelegramUser.objects.filter(chat_id=chat_id).first()
+                if telegram_user:
+                    if telegram_user in room.members.all():
+                        send_room_main_menu(chat_id, room)
+                    else:
+                        send_message("شما در این اتاق عضو نیستید.", chat_id)
+                        send_main_menu(chat_id)
                 else:
-                    room.members.add(TelegramUser.objects.get(chat_id=chat_id))
-                    send_message("شما به اتاق اضافه شدید.", chat_id)
+                    send_message("شما یوزرنیمی ندارید. لطفا ابتدا یوزرنیم خود را ثبت کنید.", chat_id)
+                    send_main_menu(chat_id)
             else:
                 send_message("اتاق یافت نشد.", chat_id)
+                send_main_menu(chat_id)
+        
+        elif message.startswith("view_room_members"):
+            room_id = int(message.split("=")[1].strip())
+            room = Room.objects.filter(id=room_id).first()
+            if room:
+                members = room.members.all()
+                response = "اعضای اتاق:\n"
+                for member in members:
+                    response += f"{member.username}\n"
+                send_message(response, chat_id)
+                send_room_main_menu(chat_id, room)
+            else:
+                send_message("اتاق یافت نشد.", chat_id)
+                send_main_menu(chat_id)
+        
+        elif message.startswith("add_expense"):
+            room_id = int(message.split("=")[1].strip())
+            room = Room.objects.filter(id=room_id).first()
+            if room:
+                telegram_user = TelegramUser.objects.filter(chat_id=chat_id).first()
+                expense_creation_session_bef = ExpenseCreationSession.objects.filter(payer=telegram_user).first()
+                if expense_creation_session_bef:
+                    expense_creation_session_bef.delete()
+                if telegram_user:
+                    if telegram_user in room.members.all():
+                        expense_creation_session = ExpenseCreationSession.objects.create(room=room, payer=telegram_user)
+                        send_message("لطفا نام هزینه را به صورت نام هزینه = نام وارد کنید ", chat_id)
+                    else:
+                        send_message("شما در این اتاق عضو نیستید.", chat_id)
+                        send_main_menu(chat_id)
+                else:
+                    send_message("شما یوزرنیمی ندارید. لطفا ابتدا یوزرنیم خود را ثبت کنید.", chat_id)
+                    send_main_menu(chat_id)
+            
+        elif message.startswith("نام هزینه"):
+            expense_creation_session = ExpenseCreationSession.objects.filter(user__chat_id=chat_id).first()
+            if expense_creation_session:
+                expense_name = message.split("=")[1].strip()
+                expense_creation_session.name = expense_name
+                expense_creation_session.save()
+                send_message("لطفا مبلغ هزینه را به صورت مبلغ هزینه = مبلغ وارد کنید", chat_id)
+            else:
+                send_message("لطفا ابتدا یک اتاق را انتخاب کنید", chat_id)
+                send_main_menu(chat_id)
+
+        elif message.startswith("مبلغ هزینه"):
+            expense_creation_session = ExpenseCreationSession.objects.filter(user__chat_id=chat_id).first()
+            if expense_creation_session:
+                expense_amount = int(message.split("=")[1].strip())
+                expense_creation_session.amount = expense_amount
+                expense_creation_session.save()
+                send_message("لطفا توضیحات هزینه را به صورت توضیحات هزینه = توضیحات وارد کنید", chat_id)
+            elif expense_creation_session and not expense_creation_session.expense_name:
+                send_message("لطفا از ابتدا شروع کن و برای هزینه اسم انتخاب کن", chat_id)
+                expense_creation_session.delete()
+                send_main_menu(chat_id)
+            else:
+                send_message("لطفا ابتدا یک اتاق را انتخاب کنید", chat_id)
+                send_main_menu(chat_id)
+        elif message.startswith("توضیحات هزینه"):
+            expense_creation_session = ExpenseCreationSession.objects.filter(user__chat_id=chat_id).first()
+            if expense_creation_session:
+                expense_description = message.split("=")[1].strip()
+                expense_creation_session.description = expense_description
+                expense_creation_session.save()
+                send_message(" حالا یوزرنیم افرادی که میخواهی ثبت کنی را به شکل eusernames = username1, username2, ... وارد کن", chat_id)
+            elif expense_creation_session and not expense_creation_session.expense_name:
+                send_message("لطفا از ابتدا شروع کن و برای هزینه اسم انتخاب کن", chat_id)
+                expense_creation_session.delete()
+                send_main_menu(chat_id)
+            elif expense_creation_session and not expense_creation_session.expense_amount:
+                send_message("لطفا از ابتدا شروع کن و برای هزینه مبلغ انتخاب کن", chat_id)
+                expense_creation_session.delete()
+                send_main_menu(chat_id)
+            else:
+                send_message("لطفا ابتدا یک اتاق را انتخاب کنید", chat_id)
+                send_main_menu(chat_id)
+        elif message.startswith("eusernames"):
+            expense_creation_session = ExpenseCreationSession.objects.filter(user__chat_id=chat_id).first()
+            room = expense_creation_session.room
+            flag = False
+            if expense_creation_session:
+                eusernames = message.split("=")[1].strip()
+                eusernames_list = eusernames.split(",")
+                response = "کاربرانی که انتخاب کردید:\n"
+                for username in eusernames_list:
+                    user = TelegramUser.objects.filter(username=username.strip()).first()
+                    if user and user in room.members.all():
+                        expense_creation_session.users.add(user)
+                        expense_creation_session.save()
+                        response += f"{user.username}\n"
+                        flag = True
+                        expense_creation_session.participants.add(user)
+                    elif user and user not in room.members.all():
+                        response += f"{user.username} - این کاربر در این اتاق عضو نیست\n"
+                    elif user and user in expense_creation_session.participants.all():
+                        response += f"{user.username} - این کاربر قبلا انتخاب شده است\n"
+                    else:
+                        response += f"{username.strip()} - کاربری یافت نشد\n"
+                if flag :
+                    expense = Expense.objects.create(
+                        room=room,
+                        name=expense_creation_session.name,
+                        amount=expense_creation_session.amount,
+                        description=expense_creation_session.description,
+                        payer = expense_creation_session.payer,
+                        participants=expense_creation_session.participants.all()
+                    )
+                    payer = expense.payer
+                    amount = expense.amount / len(expense.participants.all())
+                    for participant in expense.participants.all():
+                        if participant != payer:
+                            payment = Payment.objects.create(
+                                expense=expense,
+                                payer=payer,
+                                participant=participant,
+                                amount=amount)
+                    expense_creation_session.delete()
+                    send_message(response, chat_id)
+                    send_message("هزینه با موفقیت اضافه شد", chat_id)
+                    send_room_main_menu(chat_id, room)
+                
+                else :
+                    send_message("هیچ کاربری انتخاب نشده است", chat_id)
+                    send_main_menu(chat_id)
+                    expense_creation_session.delete()
+            elif expense_creation_session and not expense_creation_session.expense_name:
+                send_message("لطفا از ابتدا شروع کن و برای هزینه اسم انتخاب کن", chat_id)
+                expense_creation_session.delete()
+                send_main_menu(chat_id)
+            elif expense_creation_session and not expense_creation_session.expense_amount:
+                send_message("لطفا از ابتدا شروع کن و برای هزینه مبلغ انتخاب کن", chat_id)
+                expense_creation_session.delete()
+                send_main_menu(chat_id)
+            elif expense_creation_session and not expense_creation_session.description:
+                send_message("لطفا از ابتدا شروع کن و برای هزینه توضیحات انتخاب کن", chat_id)
+                expense_creation_session.delete()
+                send_main_menu(chat_id)
+            else:
+                send_message("لطفا ابتدا یک اتاق را انتخاب کنید", chat_id)
+                send_main_menu(chat_id)
+
+            
+                
+
+
+
+                
+
 
 
                 
