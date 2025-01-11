@@ -16,5 +16,10 @@ class ExpenseCreationSession(models.Model):
     payer = models.OneToOneField(TelegramUser, on_delete=models.CASCADE, related_name='paid_expenses')
     participants = models.ManyToManyField(TelegramUser, related_name='participated_expenses')
     room = models.ForeignKey(Room, on_delete=models.CASCADE, related_name='expenses')
+
+class AddRoomMemberSession(models.Model):
+    room = models.ForeignKey(Room, on_delete=models.CASCADE, related_name='add_member_session')
+    member = models.OneToOneField(TelegramUser, on_delete=models.CASCADE, related_name='add_member_session')
+    user = models.OneToOneField(TelegramUser, on_delete=models.CASCADE, related_name='add_member_session')
     
 

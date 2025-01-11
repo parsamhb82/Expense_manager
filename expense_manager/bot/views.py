@@ -9,7 +9,7 @@ from room.models import Room, Expense, Payment
 from user.models import TelegramUser
 import environ
 import requests
-from .models import RoomCreationSession, ExpenseCreationSession
+from .models import RoomCreationSession, ExpenseCreationSession, AddRoomMemberSession
 
 
 env = environ.Env()
@@ -212,7 +212,8 @@ def send_room_main_menu(CHAT_ID, room):
     keyboard = {
         "inline_keyboard": [
             [{"text": "دیدن اعضای اتاق", "callback_data": f"view_room_members={room.id}"}],
-            [{"text": "دیدن بدهکاری و بستانکاری های من", "callback_data": f"view_room_expenses={room.id}"}],
+            [{"text": "دیدن بدهکاری های من", "callback_data": f"view_my_debts={room.id}"}],
+            [{"text": "دیدن بستانکاری های من", "callback_data": f"view_my_credits={room.id}"}]
             [{"text": "افزودن هزینه جدید", "callback_data": f"add_expense={room.id}"}],
             [{"text": "اضافه کردن اعضا", "callback_data": f"add_room_members={room.id}"}],
             [{"text": "بازگشت به منوی اصلی", "callback_data": "main_menu"}],
@@ -473,9 +474,106 @@ def telegram_webhook(request):
             else:
                 send_message("لطفا ابتدا یک اتاق را انتخاب کنید", chat_id)
                 send_main_menu(chat_id)
+        
+        elif message.startswith("view_my_debts"):
+            user = TelegramUser.objects.filter(chat_id=chat_id).first()
+            room_id = message.split("=")[1].strip()
+            room = Room.objects.filter(id=room_id).first()
+            if room:
+                if user:
+                    debts = Payment.objects.filter(participant=user)
+                    if debts.exists():
+                        response = "لیست سود و زیان شما:\n"
+                        for debt in debts:
+                            response += f"شما باید به {debt.payer.username} {debt.amount} تومان بپردازید\n"
+                        send_message(response, chat_id)
+                        send_room_main_menu(chat_id, room)
+                    else:
+                        send_message("شما هیچ سود و زیانی ندارید", chat_id)
+                        send_room_main_menu(chat_id, room)
+                else:
+                    send_message("کاربری یافت نشد", chat_id)
+                    send_main_menu(chat_id)
+            else:
+                send_message("اتاق یافت نشد", chat_id)
+                send_main_menu(chat_id)
+        
+        elif message.startswith("view_my_credits"):
+            user = TelegramUser.objects.filter(chat_id=chat_id).first()
+            room_id = message.split("=")[1].strip()
+            room = Room.objects.filter(id=room_id).first()
+            if room:
+                if user:
+                    debts = Payment.objects.filter(payer=user)
+                    if debts.exists():
+                        response = "لیست سود شما:\n"
+                        for debt in debts:
+                            response += f"شما باید از {debt.participant.username} {debt.amount} تومان بگیرید\n"
+                        send_message(response, chat_id)
+                        send_room_main_menu(chat_id, room)
+                    else:
+                        send_message("شما هیچ سودی ندارید")
+                        send_room_main_menu(chat_id, room)
+                else:
+                    send_message("کاربری یافت نشد", chat_id)
+                    send_main_menu(chat_id)
+            else:
+                send_message("اتاق یافت نشد", chat_id)
+                send_main_menu(chat_id)
+        
+        elif message.startswith("add_room_members"):
+            room_id = message.split("=")[1].strip()
+            room = Room.objects.filter(id=room_id).first()
+            user = TelegramUser.objects.filter(chat_id=chat_id).first()
+            if user:
+                if room:
+                    send_message("لطفا اسم کاربر را به شکل added_username=username انتخاب کنید", chat_id)
+                    room_add_member_session = AddRoomMemberSession.objects.filter(user=user).first()
+                    if room_add_member_session:
+                        room_add_member_session.delete()
+                        AddRoomMemberSession.objects.create(room=room, user=user)
+                else:
+                        send_message("اتاق یافت نشد", chat_id)
+                        send_main_menu(chat_id)
+            else:
+                send_message("کاربری یافت نشد", chat_id)
+                send_main_menu(chat_id)
 
-            
-                
+        elif message.startswith("added_username="):
+            room_add_member_session = AddRoomMemberSession.objects.filter(user__chat_id=chat_id).first()
+            username = message.split("=")[1].strip()
+            if room_add_member_session:
+                room = room_add_member_session.room
+                if room:
+                    user = TelegramUser.objects.filter(username=username).first()
+                    if user:
+                        if user in room.members.all():
+                            send_message("کاربر در اتاق وجود دارد", chat_id)
+                            room_add_member_session.delete()
+                            send_room_main_menu(chat_id, room)
+                        else:
+                            room.members.add(user)
+                            room.save()
+                            send_message("کاربر با موفقیت به اتاق اضافه شد", chat_id)
+                            room_add_member_session.delete()
+                            send_room_main_menu(chat_id, room)
+                    else:
+                            send_message("کاربر یافت نشد", chat_id)
+                            room_add_member_session.delete()
+                            send_room_main_menu(chat_id, room)
+                else:
+                        send_message("اتاق یافت نشد", chat_id)
+                        room_add_member_session.delete()
+                        send_main_menu(chat_id)
+            else:
+                    send_message("اتاق و سشن یافت نشد لطقا ازاول امتحان کنید", chat_id)
+                    send_main_menu(chat_id)
+        elif message == "main_menu":
+            send_main_menu(chat_id)
+
+        else:
+                send_message("دستور یافت نشد", chat_id)
+                send_main_menu(chat_id)
 
 
 
