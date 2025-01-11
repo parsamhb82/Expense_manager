@@ -5,21 +5,21 @@ from room.models import Room
 class RoomCreationSession(models.Model):
     name = models.CharField(max_length=255)
     description = models.TextField(blank=True, null=True)
-    members = models.ManyToManyField(TelegramUser, related_name='rooms')
-    user = models.OneToOneField(TelegramUser, on_delete=models.CASCADE, related_name='admin_rooms')
+    members = models.ManyToManyField(TelegramUser, related_name='room_creation_sessions')
+    user = models.OneToOneField(TelegramUser, on_delete=models.CASCADE, related_name='admin_room_creation_sessions')
 
 
 class ExpenseCreationSession(models.Model):
     name = models.CharField(max_length=255)
     description = models.TextField()
     amount = models.BigIntegerField()
-    payer = models.OneToOneField(TelegramUser, on_delete=models.CASCADE, related_name='paid_expenses')
-    participants = models.ManyToManyField(TelegramUser, related_name='participated_expenses')
-    room = models.ForeignKey(Room, on_delete=models.CASCADE, related_name='expenses')
+    payer = models.OneToOneField(TelegramUser, on_delete=models.CASCADE, related_name='expense_creation_paid_sessions')
+    participants = models.ManyToManyField(TelegramUser, related_name='expense_creation_participated_sessions')
+    room = models.ForeignKey(Room, on_delete=models.CASCADE, related_name='expense_creation_sessions')
 
 class AddRoomMemberSession(models.Model):
-    room = models.ForeignKey(Room, on_delete=models.CASCADE, related_name='add_member_session')
-    member = models.OneToOneField(TelegramUser, on_delete=models.CASCADE, related_name='add_member_session')
-    user = models.OneToOneField(TelegramUser, on_delete=models.CASCADE, related_name='add_member_session')
+    room = models.ForeignKey(Room, on_delete=models.CASCADE, related_name='add_member_sessions')
+    member = models.ForeignKey(TelegramUser, on_delete=models.CASCADE, related_name='added_as_member_sessions')
+    user = models.OneToOneField(TelegramUser, on_delete=models.CASCADE, related_name='add_room_member_sessions')
     
 
