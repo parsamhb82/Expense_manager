@@ -17,8 +17,6 @@ API_KEY = env("API_KEY")
 url = f"https://api.telegram.org/bot{API_KEY}/sendMessage"
 bot = Bot(token=API_KEY)
 
-USERNAME, NAME, DESCRIPTION, MEMBERS, EXPENSE_NAME, EXPENSE_AMOUNT, EXPENSE_PARTICIPANTS = range(7)
-
 def generate_unique_room_code():
     while True:
         room_code = str(uuid.uuid4())[:16].upper()
