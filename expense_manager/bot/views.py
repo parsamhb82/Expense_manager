@@ -2,8 +2,7 @@ import json
 import uuid
 from django.http import JsonResponse, HttpResponse
 from django.views.decorators.csrf import csrf_exempt
-from telegram import Update, Bot
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import InlineKeyboardButton
 from room.models import Room, Expense, Payment
 from user.models import TelegramUser
 import environ
@@ -15,7 +14,7 @@ env = environ.Env()
 environ.Env.read_env("../expense_manager/.env")
 API_KEY = env("API_KEY")
 url = f"https://api.telegram.org/bot{API_KEY}/sendMessage"
-bot = Bot(token=API_KEY)
+
 
 def generate_unique_room_code():
     while True:
@@ -37,9 +36,16 @@ def send_message_with_keyboard(message, keyboard, CHAT_ID):
         "text": message,
         "reply_markup": json.dumps({"keyboard": keyboard})
     })
-room_creation_cancle_keyboard = [
-    [InlineKeyboardButton("لغو", callback_data='cancel_room_creation')]
-]
+room_creation_cancel_keyboard = {
+    "inline_keyboard": [
+        [
+            {
+                "text": "لغو",
+                "callback_data": "cancel_room_creation"
+            }
+        ]
+    ]
+}
 
 def start(CHAT_ID):
     
@@ -99,9 +105,9 @@ def send_room_main_menu(CHAT_ID, room):
 @csrf_exempt
 def telegram_webhook(request):
     if request.method == 'POST':
-        update = Update.de_json(request.body, bot)
-        message = update["message"]["text"].strip()
-        chat_id = update["message"]["sender_chat"]["id"]
+        data = json.loads(request.body)
+        message = data["message"]["text"].strip()
+        chat_id = data["message"].get("sender_chat", {}).get("id", data["message"]["chat"]["id"])
         if message == "/start":
             start(chat_id)
             telegram_user = TelegramUser.objects.filter(chat_id=chat_id).first()
