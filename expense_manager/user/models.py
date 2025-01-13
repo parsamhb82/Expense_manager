@@ -6,4 +6,4 @@ class TelegramUser(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
-        return f"{self.username or 'No Username'} ({self.telegram_id})"
+        return f"{self.username or 'No Username'} ({self.chat_id})"

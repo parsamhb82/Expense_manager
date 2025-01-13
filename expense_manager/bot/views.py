@@ -8,6 +8,8 @@ from user.models import TelegramUser
 import environ
 import requests
 from .models import RoomCreationSession, ExpenseCreationSession, AddRoomMemberSession
+import random
+import string
 
 
 env = environ.Env()
@@ -17,11 +19,11 @@ url = f"https://api.telegram.org/bot{API_KEY}/sendMessage"
 
 
 def generate_unique_room_code():
+    characters = string.ascii_letters + string.digits  # Contains a-z, A-Z, and 0-9
     while True:
-        room_code = str(uuid.uuid4())[:16].upper()
-        if not Room.objects.filter(room_code=room_code).exists():
+        room_code = ''.join(random.choices(characters, k=16))  # Generate a 16-character random string
+        if not Room.objects.filter(code=room_code).exists():  # Check uniqueness in the database
             return room_code
-        
     
 
 def send_message(message, CHAT_ID):
@@ -36,7 +38,7 @@ def send_message_with_keyboard(message, keyboard, CHAT_ID):
         "text": message,
         "reply_markup": json.dumps({"keyboard": keyboard})
     })
-room_creation_cancel_keyboard = {
+room_creation_cancle_keyboard = {
     "inline_keyboard": [
         [
             {
@@ -49,7 +51,7 @@ room_creation_cancel_keyboard = {
 
 def start(CHAT_ID):
     
-    user, created = TelegramUser.objects.get_or_create(telegram_id=CHAT_ID)
+    user, created = TelegramUser.objects.get_or_create(chat_id=CHAT_ID)
     
     if user.username:
         message = f"سلام {user.username}! به ربات مدیریت هزینه‌ها خوش آمدید!"
@@ -59,38 +61,38 @@ def start(CHAT_ID):
     send_message(message, CHAT_ID)
 
 def create_username(CHAT_ID, username):
-    user, created = TelegramUser.objects.get_or_create(telegram_id=CHAT_ID)
-    if created:
+    user, created = TelegramUser.objects.get_or_create(chat_id=CHAT_ID)
+    if user.username:
+        message = "شما قبلا یوزرنیم دارید"
+    else:
         user.username = username
         user.save()
-        message = f"یوزرنیم شما با موفقیت ثبت شد. به ربات مدیریت هزینه ها خوش آمدید!"
-    else:
-        message = "شما قبلا یوزرنیم ثبت کرده اید."
+        message = "یوزرنیم شما با موفقیت ثبت شد"
     send_message(message, CHAT_ID)
 
 def send_main_menu(CHAT_ID):
     keyboard = {
         "inline_keyboard": [
             [{"text": "ساخت اتاق جدید", "callback_data": "create_room"}],
-            [{"text": "دیدن اتاق هایی که عضو هستم", "callback_data": "view_rooms"}],
+            [{"text": "دیدن یوزرنیم خودم", "callback_data": "show_username"}],
             [{"text": "دیدن اتاق های من", "callback_data": "view_my_rooms"}],
         ]
     }
     response = requests.post(url, data={
         "chat_id": CHAT_ID,
         "text": "سلام! انتخاب کنید چه کاری می‌خواهید انجام دهید:",
-        "reply_markup": keyboard
+        "reply_markup": json.dumps(keyboard)
     })
 
 def start_create_room(CHAT_ID):
-    send_message_with_keyboard("لطفا نام اتاق را به صورت نام=(نام اتاق) وارد کنید پرانتز هارا نگذارید",room_creation_cancle_keyboard, CHAT_ID)
+    send_message("لطفا نام اتاق را به شکل نام = نام وارد کنید ", CHAT_ID)
 
 def send_room_main_menu(CHAT_ID, room):
     keyboard = {
         "inline_keyboard": [
             [{"text": "دیدن اعضای اتاق", "callback_data": f"view_room_members={room.id}"}],
             [{"text": "دیدن بدهکاری های من", "callback_data": f"view_my_debts={room.id}"}],
-            [{"text": "دیدن بستانکاری های من", "callback_data": f"view_my_credits={room.id}"}]
+            [{"text": "دیدن بستانکاری های من", "callback_data": f"view_my_credits={room.id}"}],
             [{"text": "افزودن هزینه جدید", "callback_data": f"add_expense={room.id}"}],
             [{"text": "اضافه کردن اعضا", "callback_data": f"add_room_members={room.id}"}],
             [{"text": "بازگشت به منوی اصلی", "callback_data": "main_menu"}],
@@ -99,15 +101,21 @@ def send_room_main_menu(CHAT_ID, room):
     response = requests.post(url, data={
         "chat_id": CHAT_ID,
         "text": f"منوی اتاق {room.name}",
-        "reply_markup": keyboard
+        "reply_markup": json.dumps(keyboard) 
     })
 
 @csrf_exempt
 def telegram_webhook(request):
     if request.method == 'POST':
         data = json.loads(request.body)
-        message = data["message"]["text"].strip()
-        chat_id = data["message"].get("sender_chat", {}).get("id", data["message"]["chat"]["id"])
+            
+        if "message" in data and "text" in data["message"]:
+            message = data["message"]["text"].strip()
+            chat_id = data["message"]["chat"]["id"]
+            
+        elif "callback_query" in data:
+            message = data["callback_query"]["data"]
+            chat_id = data["callback_query"]["message"]["chat"]["id"]
         if message == "/start":
             start(chat_id)
             telegram_user = TelegramUser.objects.filter(chat_id=chat_id).first()
@@ -135,29 +143,32 @@ def telegram_webhook(request):
             send_main_menu(chat_id)
 
         
-        elif message.startswith("نام="):
+        elif message.startswith("نام ="):
             room_name = message.split("=")[1].strip()
             telegram_user = TelegramUser.objects.filter(chat_id=chat_id).first()
-            RoomCreationSession.objects.create(user=telegram_user, room_name=room_name)
-            send_message_with_keyboard("لطفا توضیحات را به شکل توضیحات = توضیحات وارد کنید", room_creation_cancle_keyboard, chat_id)
+            room_creation_session = RoomCreationSession.objects.filter(user=telegram_user).first()
+            if room_creation_session:
+                room_creation_session.delete()
+            RoomCreationSession.objects.create(user=telegram_user, name=room_name)
+            send_message("لطفا توضیحات اتاق را به صورت توضیحات = توضیحات وارد کنید", chat_id)
 
 
-        elif message.startswith("توضیحات="):
+        elif message.startswith("توضیحات ="):
             room_description = message.split("=")[1].strip()
             session = RoomCreationSession.objects.filter(user__chat_id=chat_id).first()
             if session:
-                session.room_description = room_description
+                session.description = room_description
                 session.save()
-                send_message_with_keyboard("لطفا یوزرنیم هایی که در اتاق می‌خواهید قرار دهید را به صورت usernames = username1,username2,... وارد کنید", room_creation_cancle_keyboard,chat_id)
+                send_message("لطفا یوزرنیم هایی که در اتاق می‌خواهید قرار دهید را به صورت usernames = username1,username2,... وارد کنید", chat_id)
             else :
                 send_message("لطفا ابتدا نام اتاق را وارد کنید", chat_id)
                 send_main_menu(chat_id)
         elif message.startswith("usernames ="):
-            usernames = message[11:].split(",")
+            usernames = message.split("=")[1].strip().split(",")
             session = RoomCreationSession.objects.filter(user__chat_id=chat_id).first()
             response = ''
             if session:
-                room = Room.objects.create(name=session.room_name, description=session.room_description, admin=session.user, code = generate_unique_room_code())
+                room = Room.objects.create(name=session.name, description=session.description, admin=session.user, code = generate_unique_room_code())
                 for username in usernames:
                     user = TelegramUser.objects.filter(username=username.strip()).first()
                     if user:
@@ -180,7 +191,7 @@ def telegram_webhook(request):
             else:
                 send_message("شما یوزرنیمی ندارید. لطفا ابتدا یوزرنیم خود را ثبت کنید.", chat_id)
         
-        elif message == "list_rooms":
+        elif message == "view_my_rooms":
             telegram_user = TelegramUser.objects.get(chat_id=chat_id)
             rooms = telegram_user.rooms.all()
             if rooms:
@@ -245,7 +256,7 @@ def telegram_webhook(request):
                     send_main_menu(chat_id)
             
         elif message.startswith("نام هزینه"):
-            expense_creation_session = ExpenseCreationSession.objects.filter(user__chat_id=chat_id).first()
+            expense_creation_session = ExpenseCreationSession.objects.filter(payer__chat_id=chat_id).first()
             if expense_creation_session:
                 expense_name = message.split("=")[1].strip()
                 expense_creation_session.name = expense_name
@@ -256,13 +267,13 @@ def telegram_webhook(request):
                 send_main_menu(chat_id)
 
         elif message.startswith("مبلغ هزینه"):
-            expense_creation_session = ExpenseCreationSession.objects.filter(user__chat_id=chat_id).first()
+            expense_creation_session = ExpenseCreationSession.objects.filter(payer__chat_id=chat_id).first()
             if expense_creation_session:
                 expense_amount = int(message.split("=")[1].strip())
                 expense_creation_session.amount = expense_amount
                 expense_creation_session.save()
                 send_message("لطفا توضیحات هزینه را به صورت توضیحات هزینه = توضیحات وارد کنید", chat_id)
-            elif expense_creation_session and not expense_creation_session.expense_name:
+            elif expense_creation_session and not expense_creation_session.name:
                 send_message("لطفا از ابتدا شروع کن و برای هزینه اسم انتخاب کن", chat_id)
                 expense_creation_session.delete()
                 send_main_menu(chat_id)
@@ -270,7 +281,7 @@ def telegram_webhook(request):
                 send_message("لطفا ابتدا یک اتاق را انتخاب کنید", chat_id)
                 send_main_menu(chat_id)
         elif message.startswith("توضیحات هزینه"):
-            expense_creation_session = ExpenseCreationSession.objects.filter(user__chat_id=chat_id).first()
+            expense_creation_session = ExpenseCreationSession.objects.filter(payer__chat_id=chat_id).first()
             if expense_creation_session:
                 expense_description = message.split("=")[1].strip()
                 expense_creation_session.description = expense_description
@@ -288,7 +299,7 @@ def telegram_webhook(request):
                 send_message("لطفا ابتدا یک اتاق را انتخاب کنید", chat_id)
                 send_main_menu(chat_id)
         elif message.startswith("eusernames"):
-            expense_creation_session = ExpenseCreationSession.objects.filter(user__chat_id=chat_id).first()
+            expense_creation_session = ExpenseCreationSession.objects.filter(payer__chat_id=chat_id).first()
             room = expense_creation_session.room
             flag = False
             if expense_creation_session:
@@ -298,11 +309,10 @@ def telegram_webhook(request):
                 for username in eusernames_list:
                     user = TelegramUser.objects.filter(username=username.strip()).first()
                     if user and user in room.members.all():
-                        expense_creation_session.users.add(user)
+                        expense_creation_session.participants.add(user)
                         expense_creation_session.save()
                         response += f"{user.username}\n"
                         flag = True
-                        expense_creation_session.participants.add(user)
                     elif user and user not in room.members.all():
                         response += f"{user.username} - این کاربر در این اتاق عضو نیست\n"
                     elif user and user in expense_creation_session.participants.all():
@@ -316,10 +326,10 @@ def telegram_webhook(request):
                         amount=expense_creation_session.amount,
                         description=expense_creation_session.description,
                         payer = expense_creation_session.payer,
-                        participants=expense_creation_session.participants.all()
                     )
+                    expense.participants.set(expense_creation_session.participants.all())  
                     payer = expense.payer
-                    amount = expense.amount / len(expense.participants.all())
+                    amount = expense.amount / (len(expense.participants.all()) + 1)
                     for participant in expense.participants.all():
                         if participant != payer:
                             payment = Payment.objects.create(
@@ -404,11 +414,11 @@ def telegram_webhook(request):
             user = TelegramUser.objects.filter(chat_id=chat_id).first()
             if user:
                 if room:
-                    send_message("لطفا اسم کاربر را به شکل added_username=username انتخاب کنید", chat_id)
+                    send_message("لطفا اسم کاربر را به شکل added_username = username انتخاب کنید", chat_id)
                     room_add_member_session = AddRoomMemberSession.objects.filter(user=user).first()
                     if room_add_member_session:
                         room_add_member_session.delete()
-                        AddRoomMemberSession.objects.create(room=room, user=user)
+                    AddRoomMemberSession.objects.create(room=room, user=user)
                 else:
                         send_message("اتاق یافت نشد", chat_id)
                         send_main_menu(chat_id)
@@ -416,7 +426,7 @@ def telegram_webhook(request):
                 send_message("کاربری یافت نشد", chat_id)
                 send_main_menu(chat_id)
 
-        elif message.startswith("added_username="):
+        elif message.startswith("added_username ="):
             room_add_member_session = AddRoomMemberSession.objects.filter(user__chat_id=chat_id).first()
             username = message.split("=")[1].strip()
             if room_add_member_session:
